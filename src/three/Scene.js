@@ -5,10 +5,8 @@ import { createStarfield } from './Starfield.js'
 import { createPlanet, disposeSharedGeometry } from './Planet.js'
 import { createOrbitLine } from './OrbitLine.js'
 import { BODIES, SUN, SCENE, orbitUnits, sunRadiusUnits } from '../data/bodies.js'
-import { heliocentricPosition, elementsAtDate } from '../lib/kepler.js'
+import { scenePositionFor, sceneOrbitPointAt } from '../lib/orbits.js'
 import { daysSinceJ2000, jdFromDate, dateFromJd, J2000 } from '../lib/time.js'
-
-const DEG_TO_RAD = Math.PI / 180
 
 /**
  * Orquestador de la escena.
@@ -90,15 +88,15 @@ export class SolarSystemScene {
     this.scene.add(this.sun.group)
 
     for (const body of BODIES) {
-      // Escala de la elipse según el semieje mayor. Es una medida característica,
-      // no un radio fijo: la elipse real se genera aparte con Kepler.
-      const orbitScale = orbitUnits(body.aAU, this.scaleMode)
-
-      const orbit = createOrbitLine(orbitScale)
+      // La elipse real la escribe `_updateOrbitLines` justo debajo, con
+      // `sceneOrbitPointAt`. El radio que se pasa aquí solo rellena el círculo
+      // inicial para que la geometría no nazca degenerada; no es el que acaba
+      // viéndose.
+      const orbit = createOrbitLine(orbitUnits(body.aAU, this.scaleMode))
       this.scene.add(orbit.line)
       this.orbits.push(orbit)
       this.disposables.push(orbit)
-      this._orbitGeometries.set(body.id, { geometry: orbit.geometry, body, scale: orbitScale })
+      this._orbitGeometries.set(body.id, { geometry: orbit.geometry, body })
 
       const planet = createPlanet(body, { scaleMode: this.scaleMode })
       const holder = new THREE.Group()
@@ -106,7 +104,7 @@ export class SolarSystemScene {
       holder.add(planet.inclinationGroup)
       this.scene.add(holder)
 
-      this.planets.set(body.id, { ...planet, holder, orbitScale, body })
+      this.planets.set(body.id, { ...planet, holder, body })
     }
 
     this._updateOrbitLines()
@@ -116,37 +114,21 @@ export class SolarSystemScene {
   /**
    * Reescribe las líneas de órbita como elipses reales.
    *
-   * Se recorre la anomalía excéntrica E, no M: E es el parámetro uniforme en
-   * el propio plano orbital, así que los puntos quedan espaciados como en la
-   * elipse real y no como en un círculo.
+   * El barrido y el escalado los hace `sceneOrbitPointAt`, la misma función
+   * pura que usan los tests. Aquí solo se copia el resultado al BufferAttribute.
    */
   _updateOrbitLines() {
-    for (const { geometry, body, scale } of this._orbitGeometries.values()) {
+    for (const { geometry, body } of this._orbitGeometries.values()) {
       const attribute = geometry.getAttribute('position')
       const positions = attribute.array
-      const el = elementsAtDate(body.elements, 0)
+      const count = attribute.count
 
-      const argPeri = el.peri * DEG_TO_RAD
-      const node = el.node * DEG_TO_RAD
-      const incl = el.i * DEG_TO_RAD
-
-      for (let i = 0; i < attribute.count; i++) {
-        const E = (i / (attribute.count - 1)) * Math.PI * 2
-        const xOrb = el.a * (Math.cos(E) - el.e)
-        const yOrb = el.a * Math.sqrt(1 - el.e * el.e) * Math.sin(E)
-
-        const step1X = xOrb * Math.cos(argPeri) - yOrb * Math.sin(argPeri)
-        const step1Y = xOrb * Math.sin(argPeri) + yOrb * Math.cos(argPeri)
-        const step2Y = step1Y * Math.cos(incl)
-        const z = step1Y * Math.sin(incl)
-
-        const x = step1X * Math.cos(node) - step2Y * Math.sin(node)
-        const y = step1X * Math.sin(node) + step2Y * Math.cos(node)
-
-        // Escala logarítmica comprimida, y el eje Z astronómico pasa a Y.
-        positions[i * 3] = x * scale
-        positions[i * 3 + 1] = z * scale
-        positions[i * 3 + 2] = -y * scale
+      for (let i = 0; i < count; i++) {
+        const E = (i / (count - 1)) * Math.PI * 2
+        const [x, y, z] = sceneOrbitPointAt(body, E, this.scaleMode)
+        positions[i * 3] = x
+        positions[i * 3 + 1] = y
+        positions[i * 3 + 2] = z
       }
 
       attribute.needsUpdate = true
@@ -155,16 +137,9 @@ export class SolarSystemScene {
 
   /** Posición de cada planeta en el instante actual, vía Kepler. */
   _placePlanets() {
-    const T = this.simDays / 36525
-    const jd = J2000 + this.simDays
-
-    for (const entry of this.planets.values()) {
-      const { holder, body } = entry
-      const [x, y, z] = heliocentricPosition(body.elements, jd, T)
-
-      holder.position.set(x, z, -y)
-
-      entry.position = holder.position
+    for (const { holder, body } of this.planets.values()) {
+      const [x, y, z] = scenePositionFor(body, this.simDays, this.scaleMode)
+      holder.position.set(x, y, z)
     }
   }
 

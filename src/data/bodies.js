@@ -72,6 +72,27 @@ export function sunRadiusUnits(mode = 'visual') {
 }
 
 /**
+ * Factor de conversión de UA a unidades de escena, para un semieje mayor dado.
+ *
+ * `orbitUnits` devuelve una DISTANCIA en unidades de escena. Esto es el FACTOR
+ * que hay que multiplicar por una posición expresada en UA. No son lo mismo, y
+ * confundirlos causó dos bugs en la fase 2: los planetas se colocaban en
+ * unidades de UA (todos apilados en el centro, embarridos por la corona solar) y
+ * las líneas de órbita salían multiplicadas por el semieje mayor.
+ *
+ * Se define como `distancia(a) / a` para que en r = a el cuerpo caiga
+ * exactamente en la distancia característica, igual que en la fase 1.
+ *
+ * @param {number} aAU semieje mayor en UA
+ * @param {'visual'|'real'} mode
+ * @returns {number} unidades de escena por UA
+ */
+export function unitsPerAUFor(aAU, mode = 'visual') {
+  if (mode === 'real') return SCENE.unitsPerAU
+  return orbitUnits(aAU, mode) / aAU
+}
+
+/**
  * Elementos keplerianos J2000 de JPL (Standish, "Approximate Positions of the
  * Major Planets"), con las tasas de variación por siglo.
  *

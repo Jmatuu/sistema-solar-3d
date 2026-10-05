@@ -32,6 +32,7 @@ npm run build    # genera dist/
 npm run preview  # sirve dist/
 npm run check       # imports + montaje de componentes + integridad de datos
 npm run validate    # valida el solver de Kepler contra invariantes y efemérides
+npm run diag        # tabla de distancias y radios para contrastar con la pantalla
 npm run test        # todo lo anterior más el build. Ejecuta esto antes de cerrar una fase.
 ```
 
@@ -47,7 +48,7 @@ src/
 ├─ lib/
 │  ├─ time.js           # Día Juliano, periodos orbitales
 │  ├─ kepler.js         # solver de Kepler y posición heliocéntrica
-│  └─ orbits.js         # conversión a coordenadas de escena
+│  └─ orbits.js         # UA → unidades de escena (el único punto de cambio)
 ├─ three/
 │  ├─ Scene.js          # renderer, bucle, posiciones
 │  ├─ Controls.js       # OrbitControls
@@ -90,8 +91,17 @@ se desviaba 122°, la Tierra solo 0.7°). Componer las rotaciones hace que la
 correctitud sea estructural.
 
 **El eje Z astronómico se pasa a Y.** `heliocentricPosition` devuelve el espacio
-eclíptico J2000 con Z al norte; Three.js usa Y-up, así que la escena intercambia
-los ejes. Por eso en `Scene.js` se escribe `holder.position.set(x, z, -y)`.
+eclíptico J2000 con Z al norte; Three.js usa Y-up, así que el intercambio de
+ejes ocurre dentro de `scenePositionFor`, que ya devuelve coordenadas de escena.
+Nadie más debería tener que acordarse.
+
+**Distancia y factor de escala no son lo mismo.** `orbitUnits(aAU)` devuelve una
+DISTANCIA en unidades de escena; `unitsPerAUFor(aAU)` devuelve el FACTOR con el
+que hay que multiplicar una posición expresada en UA. Confundirlos causó dos
+bugs seguidos en la fase 2: los planetas se colocaban en unidades de UA (todos
+apilados en el centro, embarridos por la corona solar) y las líneas de órbita
+salían multiplicadas por el semieje mayor. Ambos están ahora cubiertos por tests
+que reintroducen el fallo a propósito para comprobar que lo detectan.
 
 **`logarithmicDepthBuffer`.** Necesario porque el rango de profundidad va de
 0.01 a 5e6; con el buffer estándar se produce z-fighting al hacer zoom.
@@ -119,7 +129,7 @@ Hace dos cosas distintas:
    Existe por dos fallos reales. El primero fue un `useState` usado sin
    importar en `TimeControls`. El segundo, quitar `SUN` del import de
    `Scene.js` al limpiar símbolos aparentemente sin usar mientras la línea
-   `color: SUN.color` seguía ahí. EseBuilding dio la web en blanco con el build
+   `color: SUN.color` seguía ahí. Ese fallo dio la web en blanco con el build
    en verde, porque `vite build` no ejecuta código y ningún test instanciaba la
    escena (necesita WebGL). La comprobación estática sí lo ve.
 
@@ -128,9 +138,22 @@ Hace dos cosas distintas:
    colores sean hex válidos, que ningún planeta tenga su radio por encima de la
    mitad de su órbita, y que la corona del Sol no invada la órbita de Mercurio.
 
+   Los checks de posición orbital **llaman a `scenePositionFor` y
+   `sceneOrbitPointAt`**, las mismas funciones que usa el render. La versión
+   anterior reimplementaba el escalado a mano dentro del propio test mientras
+   el renderer hacía otra cosa, y por eso dio verde con los ocho planetas
+   apilados en el centro de la escena. Un assert que reimplementa la intención
+   en lugar de ejercer el código no prueba nada.
+
+   Para confirmar que esos tests sirven, hay que reintroducir el fallo y verlos
+   caer: quitando el factor de escala fallan cuatro comprobaciones, y
+   multiplicando la línea de órbita por el semieje mayor en vez de por el factor
+   fallan dos.
+
 Lo que sigue **sin** cubrir: nada ejecuta `_buildSystem()`, así que un fallo en
-la construcción de la escena 3D solo se ve abriendo el navegador. El import
-incorrecto se detecta, un error de lógica dentro del bucle no.
+la construcción de la escena 3D, dentro de `_buildSystem` o del bucle de
+animación, solo se ve abriendo el navegador. Los imports incorrectos y los
+errores de escalado se detectan estáticamente; la lógica de Three.js no.
 
 ### `npm run validate`
 
@@ -147,15 +170,36 @@ no usa ninguna referencia inventada, solo invariantes que se pueden derivar aqu�
 mismo o relaciones astronómicas verificables entre cuerpos. Si añades
 referencias externas, comprueba que son correctas antes de confiar en ellas.
 
+### `npm run diag`
+
+Imprime una tabla con la distancia mínima y máxima de cada planeta **medida con
+la función de producción** (`scenePositionFor`), junto a su radio visual. No
+falla nunca: es la referencia numérica contra la que hay que mirar la pantalla.
+
+```
+cuerpo      q(unidades)   Q(unidades)   radio   Q/radio
+mercury          6.35        9.65    0.90     10.7
+venus           52.46       53.17    4.99     10.7
+earth           74.76       77.30    5.22     14.8
+jupiter        184.85      203.65   16.00     12.7
+neptune        317.24      322.77   11.30     28.6
+```
+
+El hueco de Mercurio (6.35 frente a la corona de 5.85) es el más ajustado del
+sistema y el que primero delata un factor de escala mal puesto.
+
 ### Lo verificado en fase 2
 
-- `npm run test` pasa: imports, 22 comprobaciones de datos, 15 grupos del solver
+- `npm run test` pasa: imports, 25 comprobaciones de datos, 15 grupos del solver
   y build limpio.
 - Órbitas elípticas reales: Mercurio va de 0.3075 a 0.4667 UA, la Tierra de
   0.9833 a 1.0167 UA.
 - El Sol en J2000 cae en 280.38° contra 280.46° tabulado.
 - La Tierra está en perihelio el 3 de enero de 2024 y en afelio el 4 de julio.
+- El par de planetas más ajustado en 100 años es Urano/Neptuno, con 2.86
+  unidades de hueco entre centros.
 
 Lo que **no** está verificado: el render visual en pantalla. Conviene abrirlo y
-comprobar que las elipses se ven inclinadas y que los planetas no se salen de
-su órbita.
+contrastarlo con `npm run diag`: las elipses deben verse inclinadas, Mercurio
+queda pegado al Sol pero fuera de la corona, y Neptuno es el anillo más
+exterior.

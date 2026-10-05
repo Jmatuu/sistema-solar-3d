@@ -5,7 +5,8 @@ import { renderToString } from 'react-dom/server'
 import { TimeControls } from './src/ui/TimeControls.jsx'
 import { BodyInfo } from './src/ui/BodyInfo.jsx'
 import { BODIES, SUN, findBody, ALL_BODIES } from './src/data/bodies.js'
-import { radiusUnits, orbitUnits, sunRadiusUnits } from './src/data/bodies.js'
+import { radiusUnits, orbitUnits, sunRadiusUnits, unitsPerAUFor } from './src/data/bodies.js'
+import { scenePositionFor, sceneOrbitPointAt } from './src/lib/orbits.js'
 
 let fallos = 0
 function check(nombre, fn) {
@@ -96,34 +97,87 @@ check('órbitas estrictamente crecientes por orden de distancia', () => {
   }
   return `${orden.length} planetas ordenados`
 })
-check('la elipse dibujada contiene al planeta', () => {
-  // La elipse se dibuja multiplicando la posición en AU por orbitUnits(a)/a.
-  // El logMap es monotono pero no lineal, así que el perihelio y el afelio se
-  // comprimen distinto: hay que comprobar que ambos siguen siendo mayores que
-  // el radio del planeta, o el planeta quedaría fuera de su propia órbita.
+check('la posición real cae dentro de su propia elipse', () => {
+  // Estos checks usan la función de producción (scenePositionFor) en vez de
+  // recalcular el escalado a mano. La versión anterior reimplementaba
+  // `orbitUnits(a) / a` dentro del test mientras el renderer hacía otra cosa:
+  // daba verde con la escena rota. Un assert que reimplementa la intención no
+  // prueba nada.
   for (const b of BODIES) {
-    const a = b.elements.a[0]
-    const e = b.elements.e[0]
-    const escala = orbitUnits(a) / a
-    const q = a * (1 - e) * escala
-    const Q = a * (1 + e) * escala
+    let min = Infinity
+    let max = 0
+    const periodo = Math.pow(b.elements.a[0], 1.5) * 365.25
+    for (let k = 0; k <= 240; k++) {
+      const p = scenePositionFor(b, (k / 240) * periodo)
+      const d = Math.hypot(p[0], p[1], p[2])
+      if (d < min) min = d
+      if (d > max) max = d
+    }
     const r = radiusUnits(b.radiusKm)
-    if (Q <= q) throw new Error(`${b.id}: elipse al revés Q=${Q.toFixed(2)} <= q=${q.toFixed(2)}`)
-    if (q <= r) throw new Error(`${b.id}: perihelio ${q.toFixed(2)} <= radio ${r.toFixed(2)}`)
-  }
-  return 'perihelio > radio en los 8 planetas'
-})
-check('las elipses no invaden la corona del Sol', () => {
-  const corona = (sunRadiusUnits() * 2.6) / 2
-  for (const b of BODIES) {
-    const a = b.elements.a[0]
-    const e = b.elements.e[0]
-    const q = a * (1 - e) * (orbitUnits(a) / a)
-    if (q <= corona) {
-      throw new Error(`${b.id}: perihelio ${q.toFixed(2)} dentro de la corona ${corona.toFixed(2)}`)
+    if (max <= min) throw new Error(`${b.id}: recorrido degenerado`)
+    if (min <= r) {
+      throw new Error(`${b.id}: pasa a ${min.toFixed(2)} del centro, dentro de su propio radio ${r.toFixed(2)}`)
     }
   }
-  return `perihelio mínimo ${(0.3075 * (orbitUnits(0.3871) / 0.3871)).toFixed(2)} > corona ${corona.toFixed(2)}`
+  return 'ningún planeta se solapa con el Sol en los 8'
+})
+check('las posiciones y las líneas de órbita usan el mismo factor', () => {
+  // La elipse se dibuja con sceneOrbitPointAt y el planeta se coloca con
+  // scenePositionFor. Si divergieran, el planeta iría por un lado y su anillo
+  // por otro, sin que ningún test previo lo notase.
+  for (const b of BODIES) {
+    const f = unitsPerAUFor(b.aAU)
+    for (let k = 0; k < 16; k++) {
+      const E = (k / 16) * Math.PI * 2
+      const p = sceneOrbitPointAt(b, E)
+      const d = Math.hypot(p[0], p[1], p[2])
+      const esperado = b.elements.a[0] * f
+      const tolerancia = b.elements.a[0] * b.elements.e[0] * f + 1e-9
+      if (Math.abs(d - esperado) > tolerancia) {
+        throw new Error(`${b.id}: elipse a ${d.toFixed(2)}, esperado ~${esperado.toFixed(2)} ± ${tolerancia.toFixed(2)}`)
+      }
+    }
+  }
+  return 'factores coherentes en los 8 planetas'
+})
+check('las elipses no invaden la corona del Sol', () => {
+  // El perihelio más interior es el de Mercurio, medido con la función real.
+  const corona = (sunRadiusUnits() * 2.6) / 2
+  const b = BODIES[0]
+  let min = Infinity
+  const periodo = Math.pow(b.elements.a[0], 1.5) * 365.25
+  for (let k = 0; k <= 240; k++) {
+    const p = scenePositionFor(b, (k / 240) * periodo)
+    min = Math.min(min, Math.hypot(p[0], p[1], p[2]))
+  }
+  if (min <= corona) {
+    throw new Error(`${b.id}: perihelio ${min.toFixed(2)} dentro de la corona ${corona.toFixed(2)}`)
+  }
+  return `perihelio de Mercurio ${min.toFixed(2)} > corona ${corona.toFixed(2)}`
+})
+check('ningún planeta solapa con otro', () => {
+  // Muestreo sobre 100 años. El par más ajustado acaba siendo Mercurio/Venus.
+  let peor = Infinity
+  let par = ''
+  const pasos = 600
+  for (let k = 0; k <= pasos; k++) {
+    const t = (k / pasos) * 36525
+    const pts = BODIES.map((b) => scenePositionFor(b, t))
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const a = pts[i]
+        const c = pts[j]
+        const d = Math.hypot(a[0] - c[0], a[1] - c[1], a[2] - c[2])
+        const hueco = d - (radiusUnits(BODIES[i].radiusKm) + radiusUnits(BODIES[j].radiusKm))
+        if (hueco < peor) {
+          peor = hueco
+          par = `${BODIES[i].id}/${BODIES[j].id}`
+        }
+      }
+    }
+  }
+  if (peor <= 0) throw new Error(`${par} se solapan (hueco ${peor.toFixed(2)})`)
+  return `par más ajustado ${par} con ${peor.toFixed(2)} de hueco`
 })
 check('todos los planetas tienen los campos que pide el panel', () => {
   const campos = ['id', 'name', 'aAU', 'radiusKm', 'massKg', 'rotationHours', 'axialTiltDeg', 'color', 'elements']

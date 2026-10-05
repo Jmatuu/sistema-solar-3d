@@ -10,6 +10,7 @@
     "check": "npm run check:imports && vite build --ssr ssr-check.jsx --outDir dist-ssr --logLevel error && node dist-ssr/ssr-check.js",
     "check:imports": "node check-imports.mjs",
     "validate": "vite build --ssr validate-kepler.jsx --outDir dist-validate --logLevel error && node dist-validate/validate-kepler.js",
+    "diag": "vite build --ssr diag-scale.jsx --outDir dist-diag --logLevel error && node dist-diag/diag-scale.js",
     "test": "npm run check:imports && npm run check && npm run validate && npm run build"
   },
   "dependencies": {
