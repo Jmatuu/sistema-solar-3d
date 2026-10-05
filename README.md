@@ -30,8 +30,9 @@ npm install
 npm run dev      # http://127.0.0.1:5173
 npm run build    # genera dist/
 npm run preview  # sirve dist/
-npm run check    # monta los componentes y valida los datos (ver abajo)
-npm run validate # valida el solver de Kepler contra invariantes y efemérides
+npm run check       # imports + montaje de componentes + integridad de datos
+npm run validate    # valida el solver de Kepler contra invariantes y efemérides
+npm run test        # todo lo anterior más el build. Ejecuta esto antes de cerrar una fase.
 ```
 
 ## Estructura
@@ -101,17 +102,35 @@ de la distancia.
 
 ## Verificación
 
+### `npm run test`
+
+Ejecuta las tres comprobaciones y el build. Es lo que hay que pasar antes de
+cerrar una fase. Sale distinto de 0 si algo falla.
+
 ### `npm run check`
 
-`vite build` **solo valida sintaxis**: no ejecuta el código. Por eso un hook
-usado sin importar compila limpio y revienta en el navegador. `npm run check`
-cierra ese hueco: renderiza los componentes con `react-dom/server` y valida los
-datos astronómicos. Cubre el montaje de `TimeControls` y `BodyInfo`, que los
-formatos no produzcan `NaN`, que los colores sean hex válidos, que ningún
-planeta tenga su radio por encima de la mitad de su órbita, y que la corona
-del Sol no invada la órbita de Mercurio.
+Hace dos cosas distintas:
 
-Ejecútalo antes de dar por buena cualquier fase. Sale distinto de 0 si algo falla.
+1. **Comprobación estática de imports** (`check-imports.mjs`). Resuelve cada
+   `import { a, b } from './x.js'` contra los `export` reales del módulo destino,
+   y detecta identificadores usados pero no declarados ni importados. Es
+   estático: no necesita navegador ni cargar three.
+
+   Existe por dos fallos reales. El primero fue un `useState` usado sin
+   importar en `TimeControls`. El segundo, quitar `SUN` del import de
+   `Scene.js` al limpiar símbolos aparentemente sin usar mientras la línea
+   `color: SUN.color` seguía ahí. EseBuilding dio la web en blanco con el build
+   en verde, porque `vite build` no ejecuta código y ningún test instanciaba la
+   escena (necesita WebGL). La comprobación estática sí lo ve.
+
+2. **Montaje y datos** (`ssr-check.jsx`). Renderiza los componentes con
+   `react-dom/server` y valida que los formatos no produzcan `NaN`, que los
+   colores sean hex válidos, que ningún planeta tenga su radio por encima de la
+   mitad de su órbita, y que la corona del Sol no invada la órbita de Mercurio.
+
+Lo que sigue **sin** cubrir: nada ejecuta `_buildSystem()`, así que un fallo en
+la construcción de la escena 3D solo se ve abriendo el navegador. El import
+incorrecto se detecta, un error de lógica dentro del bucle no.
 
 ### `npm run validate`
 
@@ -130,9 +149,8 @@ referencias externas, comprueba que son correctas antes de confiar en ellas.
 
 ### Lo verificado en fase 2
 
-- `npm run build` compila sin errores.
-- `npm run check` pasa las 22 comprobaciones.
-- `npm run validate` pasa los 15 grupos.
+- `npm run test` pasa: imports, 22 comprobaciones de datos, 15 grupos del solver
+  y build limpio.
 - Órbitas elípticas reales: Mercurio va de 0.3075 a 0.4667 UA, la Tierra de
   0.9833 a 1.0167 UA.
 - El Sol en J2000 cae en 280.38° contra 280.46° tabulado.

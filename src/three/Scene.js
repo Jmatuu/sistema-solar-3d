@@ -4,7 +4,7 @@ import { createSun } from './Sun.js'
 import { createStarfield } from './Starfield.js'
 import { createPlanet, disposeSharedGeometry } from './Planet.js'
 import { createOrbitLine } from './OrbitLine.js'
-import { BODIES, SCENE, orbitUnits, sunRadiusUnits } from '../data/bodies.js'
+import { BODIES, SUN, SCENE, orbitUnits, sunRadiusUnits } from '../data/bodies.js'
 import { heliocentricPosition, elementsAtDate } from '../lib/kepler.js'
 import { daysSinceJ2000, jdFromDate, dateFromJd, J2000 } from '../lib/time.js'
 
